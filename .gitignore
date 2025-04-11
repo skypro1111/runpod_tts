@@ -3,3 +3,4 @@
 __pycache__
 sql_app.db
 .DS_Store
+poetry.lock
