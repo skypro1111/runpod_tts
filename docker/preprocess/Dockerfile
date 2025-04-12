@@ -1,32 +1,33 @@
-# Використовуємо PyTorch базовий образ
+# Використовуємо slim версію PyTorch
 FROM pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime
 
-# Встановлюємо необхідні пакети
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    && rm -rf /var/lib/apt/lists/*
+# Встановлюємо змінні середовища
+ENV PYTHONUNBUFFERED=1 \
+    CUDA_VISIBLE_DEVICES=0 \
+    DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1
 
-# Створюємо робочу директорію
+# Створюємо користувача без прав root
+RUN useradd -m -u 1000 appuser
+
+# Створюємо робочу директорію та встановлюємо права
 WORKDIR /app
+RUN chown appuser:appuser /app
 
 # Копіюємо файл з залежностями та встановлюємо їх
-COPY requirements_preprocess.txt .
-RUN pip3 install --no-cache-dir -r requirements_preprocess.txt
+COPY --chown=appuser:appuser requirements_preprocess.txt .
+RUN pip3 install --no-cache-dir -r requirements_preprocess.txt && \
+    rm -rf ~/.cache/pip/*
 
 # Копіюємо необхідні файли
-COPY preprocess_handler.py .
-COPY .env_prod .
-COPY ckpts ./ckpts
-COPY test_input.json .
+COPY --chown=appuser:appuser preprocess_handler.py .
+COPY --chown=appuser:appuser .env_prod .
+COPY --chown=appuser:appuser test_input.json .
+COPY --chown=appuser:appuser ckpts ./ckpts
 
-# Створюємо користувача без прав root та директорію
-RUN useradd -m -u 1000 appuser && \
-    chown -R appuser:appuser /app
-
+# Перемикаємося на користувача без прав root
 USER appuser
-
-# Встановлюємо змінні середовища
-ENV PYTHONUNBUFFERED=1
-ENV CUDA_VISIBLE_DEVICES=0
 
 # Точка входу
 CMD ["python3", "-u", "preprocess_handler.py"]
