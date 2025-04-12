@@ -1,42 +1,27 @@
-# Етап 1: Базовий образ для збірки
-FROM nvidia/cuda:12.1.0-devel-ubuntu22.04 as builder
+# Використовуємо PyTorch базовий образ
+FROM pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime
 
-# Встановлюємо необхідні залежності для збірки
+# Встановлюємо необхідні пакети
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3.10 \
-    python3-pip \
-    python3-dev \
-    build-essential \
     && rm -rf /var/lib/apt/lists/*
-
-# Встановлюємо необхідні Python пакети
-WORKDIR /
-COPY requirements_preprocess.txt .
-RUN pip3 install --no-cache-dir -r requirements_preprocess.txt
-
-# Етап 2: Фінальний образ
-FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04
-
-# Встановлюємо тільки необхідні пакети
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3.10 \
-    python3-pip \
-    && rm -rf /var/lib/apt/lists/*
-
-# Копіюємо встановлені Python пакети
-COPY --from=builder /usr/local/lib/python3.10/dist-packages /usr/local/lib/python3.10/dist-packages
 
 # Створюємо робочу директорію
-WORKDIR /
+WORKDIR /app
+
+# Копіюємо файл з залежностями та встановлюємо їх
+COPY requirements_preprocess.txt .
+RUN pip3 install --no-cache-dir -r requirements_preprocess.txt
 
 # Копіюємо необхідні файли
 COPY preprocess_handler.py .
 COPY .env_prod .
 COPY ckpts ./ckpts
+COPY test_input.json .
 
-# Створюємо користувача без прав root
+# Створюємо користувача без прав root та директорію
 RUN useradd -m -u 1000 appuser && \
     chown -R appuser:appuser /app
+
 USER appuser
 
 # Встановлюємо змінні середовища
