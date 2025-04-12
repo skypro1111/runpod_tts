@@ -15,9 +15,13 @@ logger = logging.getLogger(__name__)
 class VoiceProcessor:
     def __init__(self):
         self.redis = None
-        self.cache_dir = Path("/media/voices/cache")
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.cache_dir = Path(settings.VOICE_CACHE_DIR)
+        self.upload_dir = Path(settings.VOICE_UPLOAD_DIR)
         
+        # Ensure directories exist
+        os.makedirs(self.cache_dir, exist_ok=True)
+        os.makedirs(self.upload_dir, exist_ok=True)
+
     async def init_redis(self):
         """Initialize Redis connection."""
         if not self.redis:
@@ -47,8 +51,8 @@ class VoiceProcessor:
             session.add(voice)
             session.commit()
             
-            # Mock processing - always returns the same file
-            example_cache = Path("/media/voices/cache/example.pkl")
+            # Mock processing - use configured cache directory
+            example_cache = self.cache_dir / "example.pkl"
             voice.cache_file_path = str(example_cache)
             
             # Update voice status
@@ -122,6 +126,59 @@ class VoiceProcessor:
         for voice in voices:
             await self.cache_voice(voice)
             logger.info(f"Cached voice {voice.id} in Redis")
+
+    def process_voice_data(self, voice_id: str, voice_data: bytes) -> dict:
+        """Process voice data and cache the results"""
+        # Save uploaded voice data
+        voice_file = self.upload_dir / f"{voice_id}.wav"
+        with open(voice_file, "wb") as f:
+            f.write(voice_data)
+            
+        # Process voice (placeholder for actual processing)
+        processed_data = {
+            "voice_id": voice_id,
+            "parameters": {
+                "pitch": 1.0,
+                "speed": 1.0,
+                # Add other voice parameters
+            }
+        }
+        
+        # Cache processed results
+        cache_file = self.cache_dir / f"{voice_id}.pkl"
+        with open(cache_file, "wb") as f:
+            pickle.dump(processed_data, f)
+            
+        return processed_data
+        
+    def get_cached_voice_data(self, voice_id: str) -> dict | None:
+        """Retrieve cached voice processing results"""
+        cache_file = self.cache_dir / f"{voice_id}.pkl"
+        if not cache_file.exists():
+            return None
+            
+        with open(cache_file, "rb") as f:
+            return pickle.load(f)
+            
+    def delete_voice_data(self, voice_id: str) -> bool:
+        """Delete voice data and cache"""
+        voice_file = self.upload_dir / f"{voice_id}.wav"
+        cache_file = self.cache_dir / f"{voice_id}.pkl"
+        
+        success = True
+        if voice_file.exists():
+            try:
+                voice_file.unlink()
+            except Exception:
+                success = False
+                
+        if cache_file.exists():
+            try:
+                cache_file.unlink()
+            except Exception:
+                success = False
+                
+        return success
 
 # Global instance
 voice_processor = VoiceProcessor() 

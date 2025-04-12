@@ -16,14 +16,15 @@ class Settings(BaseSettings):
     SQLITE_URL: str = "sqlite:///./sql_app.db"
     
     # Redis
-    REDIS_URL: str = "redis://localhost:6379/0"
-    VOICE_CACHE_TTL: int = 60 * 60 * 24  # 24 hours
+    REDIS_URL: str = "redis://10.24.2.103:6379/4"
+    VOICE_CACHE_TTL: int = 60 * 60 * 24 * 365 * 10  # 10 years
     
     # Voice Processing
-    MEDIA_ROOT: str = "/media"
-    VOICE_UPLOAD_DIR: str = "/media/voices/uploads"
-    VOICE_CACHE_DIR: str = "/media/voices/cache"
-    MAX_VOICE_FILE_SIZE: int = 50 * 1024 * 1024  # 50MB
+    MEDIA_ROOT: str = "./app/media"
+    VOICE_UPLOAD_DIR: str = "data/voice_uploads"
+    VOICE_CACHE_DIR: str = "data/voice_cache"
+    TTS_OUTPUT_DIR: str = "data/tts_output"
+    MAX_VOICE_FILE_SIZE: int = 100 * 1024 * 1024  # 50MB
     ALLOWED_VOICE_TYPES: List[str] = ["audio/wav", "audio/x-wav"]
     
     # CORS

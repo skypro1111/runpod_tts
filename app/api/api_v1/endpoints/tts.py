@@ -1,9 +1,10 @@
 from typing import Annotated
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from fastapi.responses import StreamingResponse, FileResponse
 from sqlmodel import Session
 import os
 from pathlib import Path
+import uuid
 
 from app.api.deps import get_current_user_with_api_key
 from app.models.user import User
@@ -12,74 +13,41 @@ from app.core.config import settings
 
 router = APIRouter()
 
-# For demo purposes, using a static example file
-EXAMPLE_WAV = Path(__file__).parent.parent.parent.parent / "static" / "example.wav"
+# For actual TTS generation
+def generate_tts_file(text: str, output_path: str):
+    # TODO: Implement actual TTS generation here
+    # For now, we'll just create an empty file
+    with open(output_path, 'wb') as f:
+        f.write(b'')  # Placeholder for actual TTS content
 
-@router.post("/generate_speech", response_model=TTSResponse)
-async def generate_speech(
-    *,
-    request: TTSRequest,
-    current_user: Annotated[User, Depends(get_current_user_with_api_key)],
-) -> TTSResponse | StreamingResponse:
-    """
-    Generate speech from text.
+@router.post("/generate_speech")
+async def generate_speech(text: str, background_tasks: BackgroundTasks, stream: bool = False):
+    # Generate unique filename for this request
+    filename = f"{uuid.uuid4()}.wav"
+    output_path = os.path.join(settings.MEDIA_ROOT, "tts_output", filename)
     
-    Args:
-        request: Text-to-Speech request containing text and voice settings
-        
-    Returns:
-        Audio file or streaming response depending on the request
-    """
-    # Ensure example file exists
-    if not EXAMPLE_WAV.exists():
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Example audio file not found"
-        )
+    # Ensure output directory exists
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
     
-    if request.stream:
-        # For streaming response
-        def iterfile():
-            with open(EXAMPLE_WAV, mode="rb") as file:
-                yield from file
-        
+    # Generate TTS file
+    background_tasks.add_task(generate_tts_file, text, output_path)
+    
+    if stream:
         return StreamingResponse(
-            iterfile(),
+            open(output_path, mode="rb"),
             media_type="audio/wav",
-            headers={
-                "Content-Disposition": f'attachment; filename="speech.wav"'
-            }
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
         )
     else:
-        # For file download
-        return TTSResponse(
-            audio_url=f"/api/v1/tts/download/{EXAMPLE_WAV.name}",
-            duration=3.0,  # Placeholder duration
-            text=request.text
-        )
+        return {"filename": filename}
 
 @router.get("/download/{filename}")
-async def download_audio(
-    filename: str,
-    current_user: Annotated[User, Depends(get_current_user_with_api_key)],
-) -> FileResponse:
-    """
-    Download generated audio file.
-    
-    Args:
-        filename: Name of the audio file to download
-        
-    Returns:
-        Audio file as attachment
-    """
-    if not EXAMPLE_WAV.exists():
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Audio file not found"
-        )
-    
+async def download_audio(filename: str):
+    file_path = os.path.join(settings.MEDIA_ROOT, "tts_output", filename)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Audio file not found")
     return FileResponse(
-        EXAMPLE_WAV,
+        file_path,
         media_type="audio/wav",
-        filename="speech.wav"
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
     ) 

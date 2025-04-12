@@ -4,3 +4,11 @@ __pycache__
 sql_app.db
 .DS_Store
 poetry.lock
+
+# Voice and TTS data
+data/voice_cache/*
+!data/voice_cache/.gitkeep
+data/voice_uploads/*
+!data/voice_uploads/.gitkeep
+data/tts_output/*
+!data/tts_output/.gitkeep
