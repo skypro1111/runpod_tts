@@ -8,7 +8,8 @@ import re
 import random
 import math
 import pickle
-from typing import Dict, Union, List
+import hashlib
+from typing import Dict, Union, List, Tuple
 from pypinyin import lazy_pinyin, Style
 from dotenv import load_dotenv, find_dotenv
 import runpod
@@ -42,6 +43,9 @@ SESSION_OPTS.execution_mode = onnxruntime.ExecutionMode.ORT_SEQUENTIAL
 SESSION_OPTS.graph_optimization_level = onnxruntime.GraphOptimizationLevel.ORT_ENABLE_ALL
 SESSION_OPTS.enable_mem_pattern = True
 SESSION_OPTS.enable_mem_reuse = True
+SESSION_OPTS.add_session_config_entry("session.intra_op.allow_spinning", "1")
+SESSION_OPTS.add_session_config_entry("session.inter_op.allow_spinning", "1")
+SESSION_OPTS.add_session_config_entry("arena_extend_strategy", "kSameAsRequested")
 onnxruntime.set_seed(RANDOM_SEED)
 
 def convert_char_to_pinyin(text_list: Union[List[str], List[List[str]]], polyphone: bool = True) -> List[List[str]]:
@@ -101,76 +105,109 @@ def list_str_to_idx(
     text = torch.nn.utils.rnn.pad_sequence(list_idx_tensors, padding_value=padding_value, batch_first=True)
     return text
 
-def preprocess_text_and_audio(
-    reference_audio: str,
-    ref_text: str,
-    lang: str = 'zh'
-) -> bytes:
+def generate_cache_key(audio_data: bytes, ref_text: str) -> str:
+    """Generate a unique cache key based on reference audio and text"""
+    audio_hash = hashlib.md5(audio_data).hexdigest()
+    ref_text_hash = hashlib.md5(ref_text.encode('utf-8')).hexdigest()
+    return f"{audio_hash}_{ref_text_hash}"
+
+def process_reference_input(
+    reference_audio: bytes,
+    ref_text: str
+) -> Tuple:
     """
-    Виконує препроцесинг референсного тексту та аудіо.
+    Process reference audio and text only, returning the preprocessed tensors
     
     Args:
-        reference_audio: Шлях до референсного аудіо файлу
-        ref_text: Референсний текст
-        lang: Мова тексту ('zh' або 'en')
+        reference_audio: Binary audio data
+        ref_text: Reference text
         
     Returns:
-        bytes: Серіалізовані результати препроцесингу у форматі pickle
+        Tuple: Reference audio tensors and text IDs
     """
-    # Завантаження та обробка аудіо
-
-    print(reference_audio, ref_text, lang)
-
-    audio, sr = torchaudio.load(reference_audio)
-    if sr != SAMPLE_RATE:
-        resampler = torchaudio.transforms.Resample(orig_freq=sr, new_freq=SAMPLE_RATE)
-        audio = resampler(audio)
-    audio = audio.unsqueeze(0).numpy()
+    # Write audio data to a temporary file for torchaudio to process
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
+        temp_file.write(reference_audio)
+        temp_file_path = temp_file.name
     
-    # Створення ONNX сесії
+    try:
+        # Load and process audio
+        audio, sr = torchaudio.load(temp_file_path)
+        if sr != SAMPLE_RATE:
+            resampler = torchaudio.transforms.Resample(orig_freq=sr, new_freq=SAMPLE_RATE)
+            audio = resampler(audio)
+        audio = audio.unsqueeze(0).numpy()
+        
+        # Get model type
+        ort_session = onnxruntime.InferenceSession(
+            ONNX_MODEL_PATH,
+            sess_options=SESSION_OPTS,
+            providers=['CUDAExecutionProvider']
+        )
+        model_type = ort_session._inputs_meta[0].type
+        
+        # Convert audio to float16 if needed
+        if "float16" in model_type:
+            audio = audio.astype(np.float16)
+            
+        # Process reference text
+        ref_text_processed = convert_char_to_pinyin([ref_text])
+        ref_text_ids = list_str_to_idx(ref_text_processed, VOCAB_CHAR_MAP).numpy()
+        
+        # Calculate reference audio length
+        ref_audio_len = audio.shape[-1] // HOP_LENGTH + 1
+        
+        # Package results
+        result = (audio, ref_text_ids, ref_audio_len)
+        return result
+    
+    finally:
+        # Clean up temporary file
+        os.unlink(temp_file_path)
+
+def preprocess_reference(
+    reference_audio: bytes,
+    ref_text: str
+) -> bytes:
+    """
+    Preprocesses reference audio and text, optimized for later combination with generation text
+    
+    Args:
+        reference_audio: Binary audio data
+        ref_text: Reference text
+        
+    Returns:
+        bytes: Serialized preprocessed reference data
+    """
+    # Process reference input
+    audio, ref_text_ids, ref_audio_len = process_reference_input(reference_audio, ref_text)
+    
+    # Create ONNX session
     ort_session = onnxruntime.InferenceSession(
         ONNX_MODEL_PATH,
         sess_options=SESSION_OPTS,
         providers=['CUDAExecutionProvider']
     )
-
-    # Отримання імен входів/виходів моделі
+    
+    # Get input/output names
     in_names = [input.name for input in ort_session.get_inputs()]
     out_names = [output.name for output in ort_session.get_outputs()]
-    model_type = ort_session._inputs_meta[0].type
-
-    # Конвертація аудіо у float16 якщо потрібно
-    if "float16" in model_type:
-        audio = audio.astype(np.float16)
-
-    # Розрахунок довжини тексту
-    if lang == 'zh':
-        zh_pause_punc = r"。，、；：？！"
-        ref_text_len = len(ref_text.encode('utf-8')) + 3 * len(re.findall(zh_pause_punc, ref_text))
-    else:
-        ref_text_len = len(ref_text.encode('utf-8'))
-
-    # Розрахунок максимальної тривалості
-    ref_audio_len = audio.shape[-1] // HOP_LENGTH + 1
+    
+    # Calculate maximum duration (just reference length for preprocessing)
     max_duration = np.array(ref_audio_len, dtype=np.int64)
-
-    # Конвертація тексту
-    text_ids = list_str_to_idx(
-        convert_char_to_pinyin([ref_text]), 
-        VOCAB_CHAR_MAP
-    ).numpy()
-
-    # Виконання інференсу ONNX моделі
+    
+    # Run ONNX inference
     outputs = ort_session.run(
         out_names,
         {
             in_names[0]: audio,
-            in_names[1]: text_ids,
+            in_names[1]: ref_text_ids,
             in_names[2]: max_duration
         }
     )
-
-    # Створення time_expand тензора
+    
+    # Create time_expand tensor
     t = torch.linspace(0, 1, 32 + 1, dtype=torch.float32)
     time_step = t + (-1.0) * (torch.cos(torch.pi * 0.5 * t) - 1 + t)
     delta_t = torch.diff(time_step)
@@ -183,27 +220,34 @@ def preprocess_text_and_audio(
     for i in range(32):
         emb = time_step[i] * emb_factor
         time_expand[:, i, :] = torch.cat((emb.sin(), emb.cos()), dim=-1)
-
-    # Формування результату
-    result = (
-        outputs[0],  # noise
-        outputs[3],  # cat_mel_text
-        outputs[4],  # cat_mel_text_drop
-        time_expand.numpy(),
-        outputs[1],  # rope_cos
-        outputs[2],  # rope_sin
-        delta_t.numpy(),
-        outputs[6]   # ref_signal_len
-    )
-
-    # Серіалізація результату
+    
+    # Package result
+    result = {
+        "preprocessed": (
+            outputs[0],  # noise
+            outputs[3],  # cat_mel_text (cond)
+            outputs[4],  # cat_mel_text_drop (cond_drop)
+            time_expand.numpy(),  # time_expand
+            outputs[1],  # rope_cos
+            outputs[2],  # rope_sin
+            delta_t.numpy(),  # delta_t
+            outputs[6]   # ref_signal_len
+        ),
+        "ref_data": {
+            "audio": audio,
+            "text_ids": ref_text_ids,
+            "audio_len": ref_audio_len
+        }
+    }
+    
+    # Serialize result
     return pickle.dumps(result)
 
 def handler(event):
     print(event)  
     input = event["input"]
     audio = base64.b64decode(input["reference_audio"])
-    return preprocess_text_and_audio(audio, input["ref_text"], input["lang"])
+    return preprocess_reference(audio, input["ref_text"])
 
 
 runpod.serverless.start({"handler": handler})
