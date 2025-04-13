@@ -30,11 +30,16 @@ RUN pip3 install --no-cache-dir -r requirements_preprocess.txt && \
     pip3 install --no-cache-dir torchaudio==2.6.0 && \
     rm -rf ~/.cache/pip/*
 
+# Створюємо директорію для чекпоінтів
+RUN mkdir -p /app/ckpts && chown -R appuser:appuser /app/ckpts
+
 # Копіюємо необхідні файли
 COPY --chown=appuser:appuser preprocess_handler.py .
 COPY --chown=appuser:appuser .env_prod .
 COPY --chown=appuser:appuser test_input.json .
-COPY --chown=appuser:appuser ckpts ./ckpts
+
+# Копіюємо чекпоінти
+COPY --chown=appuser:appuser ckpts/ ./ckpts/
 
 # Перемикаємося на користувача без прав root
 USER appuser

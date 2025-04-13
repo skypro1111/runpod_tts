@@ -18,4 +18,9 @@ coverage.xml
 .pytest_cache
 .env
 .venv
-.DS_Store 
+.DS_Store
+
+# Не ігноруємо важливі файли
+!ckpts/
+!.env_prod
+!test_input.json 
